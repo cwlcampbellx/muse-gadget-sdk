@@ -268,6 +268,7 @@ static char s_reply_shown[EV_TEXT];   /* the pre-speech caption last sent */
 static void mark(mark_t m);
 static bool open_note(void);
 static void log_marks(void);
+static void tts_data(const uint8_t *data, size_t len);
 static int16_t *s_pcm;       /* MINIMP3_MAX_SAMPLES_PER_FRAME */
 static int16_t *s_pcm16;     /* resampled output */
 static int64_t s_last_seq;
