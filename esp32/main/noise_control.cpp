@@ -1527,35 +1527,6 @@ static char *build_register_json(void) {
                 nullptr, nullptr);
 #endif
 
-#if CONFIG_MUSE_AVATAR_SET
-    {
-        cJSON *avatar_optional = cJSON_CreateObject();
-        cJSON_AddItemToObject(avatar_optional, "style",
-                              string_param("Face style: hal_faceplate (badge, bezel eye and grille, for "
-                                           "portrait boards), hal_eye (only the round glowing eye, for "
-                                           "round boards), vinny or pixel."));
-        cJSON_AddItemToObject(avatar_optional, "eye_color",
-                              string_param("Eye colour: red, amber, green, blue, purple or white."));
-        cJSON *glow_param = cJSON_CreateObject();
-        cJSON_AddStringToObject(glow_param, "type", "integer");
-        cJSON_AddStringToObject(glow_param, "description", "Eye glow, 0 to 100.");
-        cJSON_AddItemToObject(avatar_optional, "glow", glow_param);
-        cJSON_AddItemToObject(avatar_optional, "accessory",
-                              string_param("Accessory: none, toque, sunglasses, nightcap, party_hat, "
-                                           "santa_hat or headphones."));
-        cJSON_AddItemToObject(avatar_optional, "reaction",
-                              string_param("One-shot reaction, played once over the face and not "
-                                           "stored: wave, dance, hearts, stars, hop, peek, stretch "
-                                           "or sleep."));
-        add_command(commands, "avatar.set",
-                    "Change the gadget's face live: style, eye colour, glow and accessory, "
-                    "stored on the gadget and surviving restarts — no reflash. Or give a "
-                    "reaction to play one animation once. Every parameter is optional; "
-                    "give at least one. Returns the full current settings after the change.",
-                    nullptr, avatar_optional);
-    }
-#endif
-
 #if CONFIG_MUSE_WATCHER_CAMERA
     add_command(commands, "camera.capture",
                 "Capture one still JPEG frame from the SenseCAP Watcher camera. "
