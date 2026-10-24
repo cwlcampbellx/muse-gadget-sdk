@@ -91,33 +91,3 @@ CONFIG_MBEDTLS_HARDWARE_AES=n
 # each new lease back a second before binding it. The router has already
 # checked the address it offers.
 CONFIG_LWIP_DHCP_DOES_NOT_CHECK_OFFERED_IP=y
-
-# Muse flasher patch (HAL builds): every board built from this overlay
-# gets these two. They live here, not per-board, so no HAL board misses
-# them; boards whose makers set their own values keep theirs (Kconfig
-# takes the first value it is given).
-
-# Cross-signed roots, for TLS to hosts whose chain the IDF certificate
-# bundle doesn't carry on its own — two community TTS forks (ElevenLabs,
-# OpenAI) needed this before their calls worked at all; harmless when
-# Fish's chain doesn't need it, a silent captions-only gadget when it
-# does and the flag is missing.
-CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
-
-# Encrypt NVS: the gadget's Fish key lives there beside the Wi-Fi
-# credentials and the SDK token, and the stock flash of these boards is
-# cleartext. With no HMAC key yet, first boot generates one into eFuse
-# (see main/Kconfig.projbuild); a board whose eFuse is already locked
-# without a key falls back to plaintext, as upstream documents.
-CONFIG_HOMEHUB_NVS_ENCRYPTION=y
-
-# IDF v6 leaves NVS_SEC_HMAC_EFUSE_KEY_ID at its Kconfig default of -1
-# ("not set"), and nvs_sec_provider.c turns any negative value into a
-# compile-time #error, so turning the encryption on without naming a
-# block breaks every Muse build. The valid range is 0-5 on every
-# HMAC-capable target in this overlay (S3, C6, C3, C5 — the value is the
-# offset from EFUSE_BLK_KEY0). 5 = EFUSE_BLK_KEY5: KEY0 is the
-# flash-encryption XTS convention and KEY2 is this project's pairing
-# ECDSA block, so the last block is the one nothing else claims. First
-# boot generates the HMAC key into that block if it is still empty.
-CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID=5

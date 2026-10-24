@@ -28,8 +28,6 @@ set(GADGET_SRCS
     "wifi_known.c"
     "identity.c"
     "sdk_token_console.c"
-    "fish_config_console.c"
-    "avatar_set.c"
     "config_store.c"
     "vm_api.c"
     "diagnostic_log.c"
