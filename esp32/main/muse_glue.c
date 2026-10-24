@@ -33,8 +33,6 @@
 #include "config_store.h"
 #include "identity.h"
 #include "noise_control.h"
-#include "avatar_set.h"
-#include "fish_config_console.h"
 #include "sdk_token_console.h"
 #include "stack_monitor.h"
 #include "wifi_known.h"
@@ -642,20 +640,13 @@ static void boot_task(void *arg) {
     vTaskDelete(NULL);
 }
 
-// One console hook, three serial-only commands: the SDK token, the Fish
-// Audio config and the avatar settings.
-static bool console_hook(const char *line) {
-    return sdk_token_console_command(line) || fish_config_console_command(line)
-           || avatar_console_command(line);
-}
-
 void muse_glue_start(void) {
     // First, before Link's Wi-Fi, BLE and tunnel and Muse's display take and
     // fragment internal RAM: the CPU's light-sleep retention memory.
     muse_input_power_init();
     s_ready = xEventGroupCreate();
     muse_link_register(&s_ops);
-    muse_input_set_console_hook(console_hook);
+    muse_input_set_console_hook(sdk_token_console_command);
     muse_ble_set_name(identity_ble_name());
     ble_companion_t companion = {
         .svcs = muse_ble_services(),

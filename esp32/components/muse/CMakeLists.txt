@@ -41,7 +41,6 @@ if(CONFIG_MUSE_ENABLED)
         "muse_keypad.c"
         "muse_lv_mem.c"
         "muse_link.c"
-        "avatar_settings.c"
         "muse_ble.c")
     if(CONFIG_MUSE_HATCH)
         list(APPEND srcs "muse_chat.c" "muse_account_api.c" "muse_chat_session.cpp")

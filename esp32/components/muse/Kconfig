@@ -255,52 +255,6 @@ menu "Muse"
             them. Needs PSRAM. Without it, voice notes go over Home Link's own
             session to its paired VM and replies are shown as text.
 
-    config MUSE_TTS_FISH_API_KEY
-        string "Fish Audio API key (fallback; the flasher's stored key wins)"
-        depends on MUSE_HATCH
-        default ""
-        help
-            Spoken replies via Fish Audio (start_tts in
-            muse_chat_session.cpp). Normally the key is NOT compiled in:
-            the web flasher sends it over serial after installing
-            (">fish_config=key=...", main/fish_config_console.h) and the
-            gadget stores it in NVS, which takes precedence over this.
-            This is the fallback for hand-built gadgets. A gadget carries
-            its key — use a dedicated, spend-limited key. Empty disables
-            speech: replies stay captions at reading pace.
-
-    config MUSE_TTS_FISH_MODEL
-        string "Fish Audio model"
-        depends on MUSE_HATCH
-        default "s2.1-pro-free"
-        help
-            The Fish model header for speech: s2.1-pro-free (free, no
-            latency guarantee) or s1 (pay-as-you-go). The flasher can
-            override it per gadget with ";model=" in the fish config line.
-
-    config MUSE_TTS_FISH_REFERENCE_ID
-        string "Fish Audio voice (reference_id)"
-        depends on MUSE_HATCH
-        default "ea12ca523a644e92a94f6cdd5d28d3a5"
-        help
-            The Fish voice model replies speak in — by default the
-            gadget owner's HAL 9000 clone. The flasher can override it per
-            gadget with ";voice=" in the fish config line (a second
-            gadget gets its owner's own clone this way).
-
-    config MUSE_AVATAR_SET
-        bool "Let Muse change the avatar's look live (avatar.set)"
-        depends on MUSE_ENABLED
-        default y
-        help
-            Advertises the avatar.set command: the user asks ("make your
-            eye green", "put your toque on") and Muse changes the face's
-            style, eye colour, glow and accessory at once, stored in NVS
-            (components/muse/avatar_settings.h) and read by the renderer
-            every frame. The same settings arrive over the serial console
-            (">avatar=..."). Turn it off and the face only changes with a
-            reflash.
-
     config MUSE_HATCH_COMPACT_BUFFERS
         bool "Smaller voice session buffers, for 2 MB of PSRAM"
         depends on MUSE_HATCH
