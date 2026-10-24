@@ -28,8 +28,6 @@
 #include "sdkconfig.h"
 #include "soc/soc_caps.h"
 
-#include "avatar_set.h"
-#include "fish_config_console.h"
 #include "identity.h"
 
 // The chip's own USB port, where it has one and the log goes to it.
@@ -42,9 +40,8 @@
 static const char *TAG = "link.sdk_token";
 
 #define COMMAND "sdk_token="
-// A command line: '>', the command and its value. 512 covers the Fish
-// config line (an API key plus optional voice/model) as well as a token.
-#define COMMAND_LINE_MAX 512
+// A command line: '>', the command and a token, with room to spare.
+#define COMMAND_LINE_MAX 96
 
 bool sdk_token_console_command(const char *line) {
     if (strncmp(line, COMMAND, strlen(COMMAND)) != 0) return false;
@@ -88,12 +85,7 @@ static void feed(line_reader_t *r, char c) {
         return;
     }
     r->buf[r->len] = '\0';
-    if (!r->overflow && r->buf[0] == '>') {
-        const char *line = r->buf + 1;
-        if (!sdk_token_console_command(line)) {
-            if (!fish_config_console_command(line)) avatar_console_command(line);
-        }
-    }
+    if (!r->overflow && r->buf[0] == '>') sdk_token_console_command(r->buf + 1);
     r->len = 0;
     r->overflow = false;
 }
