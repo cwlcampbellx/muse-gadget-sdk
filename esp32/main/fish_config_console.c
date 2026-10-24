@@ -134,6 +134,18 @@ static bool fish_parse(const char *args, fish_config_t *out) {
 
 // ---- End of host-tested section ---------------------------------------------
 
+// Fallbacks when the Fish Kconfig options are not in this build's
+// sdkconfig (they depend on MUSE_HATCH): empty key/voice/model.
+#ifndef CONFIG_MUSE_TTS_FISH_API_KEY
+#define CONFIG_MUSE_TTS_FISH_API_KEY ""
+#endif
+#ifndef CONFIG_MUSE_TTS_FISH_REFERENCE_ID
+#define CONFIG_MUSE_TTS_FISH_REFERENCE_ID ""
+#endif
+#ifndef CONFIG_MUSE_TTS_FISH_MODEL
+#define CONFIG_MUSE_TTS_FISH_MODEL ""
+#endif
+
 bool fish_config_console_command(const char *line) {
     if (strncmp(line, COMMAND, strlen(COMMAND)) != 0) return false;
     fish_config_t cfg;

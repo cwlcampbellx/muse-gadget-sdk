@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "sdkconfig.h"
 
 #include "avatar_settings.h"
 
@@ -115,6 +116,16 @@ static cJSON *result_error(const char *code, const char *message) {
     return result;
 }
 
+// Everything below the host-tested section drives avatar_settings, which
+// the muse component only compiles when CONFIG_MUSE_ENABLED — so the
+// device side is guarded the same way app.c guards its avatar.set call
+// (there by CONFIG_MUSE_AVATAR_SET, which itself depends on
+// MUSE_ENABLED). avatar_set.c is in every build and the console hooks in
+// sdk_token_console.c / muse_glue.c call avatar_console_command()
+// unconditionally, so non-Muse builds get the stubs in the #else below
+// instead of references to symbols that were never compiled.
+#if CONFIG_MUSE_ENABLED
+
 static cJSON *result_ok(const char *reaction) {
     avatar_settings_t s;
     avatar_settings_get(&s);
@@ -194,3 +205,27 @@ bool avatar_console_command(const char *line) {
     fflush(stdout);
     return true;
 }
+
+#else  // !CONFIG_MUSE_ENABLED
+
+// No Muse UI in this build, so avatar_settings was never compiled and
+// there is nowhere to store a look. The WS entry point is unreachable
+// (app.c only dispatches avatar.set under CONFIG_MUSE_AVATAR_SET, which
+// depends on MUSE_ENABLED); it still answers with an error instead of
+// referencing the missing storage. The serial entry point consumes an
+// ">avatar=" line and answers unsupported, mirroring the real path's
+// error reply, so the unconditional console hooks behave the same.
+cJSON *avatar_set_ws_command(cJSON *params) {
+    (void)params;
+    return result_error("unsupported",
+                          "avatar settings need the Muse display UI, which this build leaves out");
+}
+
+bool avatar_console_command(const char *line) {
+    if (strncmp(line, COMMAND, strlen(COMMAND)) != 0) return false;
+    printf("@avatar error unsupported\n");
+    fflush(stdout);
+    return true;
+}
+
+#endif  // CONFIG_MUSE_ENABLED
