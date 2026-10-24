@@ -61,29 +61,8 @@
     "note": "Flashing takes about 3 minutes; keep the tab in front. Muse replaces Seeed's factory firmware. To go back to it later, back up the flash first: <code>python -m esptool --chip esp32s3 -p PORT read-flash 0 ALL sticky-factory.bin</code>"
   },
   {
-    "board": "muse-m5stack-sticks3",
-    "name": "M5Stack StickS3",
-    "usb": [
-      "303a:1001"
-    ]
-  },
-  {
-    "board": "muse-aipi",
-    "name": "AIPI Lite",
-    "usb": [
-      "303a:1001"
-    ]
-  },
-  {
     "board": "muse-waveshare-s3-175c",
     "name": "Waveshare ESP32-S3-Touch-AMOLED-1.75C (round puck)",
-    "usb": [
-      "303a:1001"
-    ]
-  },
-  {
-    "board": "muse-waveshare-c6-206",
-    "name": "Waveshare ESP32-C6-Touch-AMOLED-2.06 (watch)",
     "usb": [
       "303a:1001"
     ]
