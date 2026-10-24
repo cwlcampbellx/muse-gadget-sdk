@@ -55,6 +55,7 @@
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
+#include "esp_http_client.h"
 #include "esp_tls.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
@@ -70,6 +71,7 @@ extern "C" {
 #include "muse_link.h"
 #include "muse_settings.h"
 #include "muse_wifi.h"
+#include "nvs.h"
 }
 #include "muse_chat_priv.h"
 
@@ -1508,6 +1510,249 @@ static void on_chat_ack(stream_t *s)
 
 /* ---- Turn: speech ---- */
 
+/* ---- Speech: the TTS adapter ----
+ *
+ * start_tts talks to exactly one function, muse_tts_fetch(), which is the
+ * provider adapter (the pluggable-TTS shape the community forks converged
+ * on: swap this one function, not the turn logic, to change provider).
+ * The adapter shipped here speaks two ways, picked per reply by config:
+ *
+ * - Direct: Fish Audio, with the maker's own Fish account.
+ * - Relayed: when a speech URL is stored (fish_url — the flasher's
+ *   Advanced "speech relay", AIPI's Step 4 shape and the jksim self-host
+ *   pattern), an OpenAI-format speech request goes to that host instead
+ *   and the MP3 it returns is played. Colin's aipi-fish-proxy Worker is
+ *   such a relay (it translates to Fish server-side), so direct vs
+ *   relayed is a config line, not a rebuild.
+ *
+ * Replies are spoken instead of the stock silence pacing, when a Fish
+ * API key is available: the one the web flasher stored in NVS
+ * (main/fish_config_console.h) first, else the build's
+ * CONFIG_MUSE_TTS_FISH_API_KEY. Voice and model resolve the same way
+ * (fish_voice / fish_model over CONFIG_MUSE_TTS_FISH_REFERENCE_ID /
+ * CONFIG_MUSE_TTS_FISH_MODEL, whose defaults are the HAL clone and
+ * s2.1-pro-free). The text is stripped of Markdown marks first (the
+ * upstream PR #165 fix) so they aren't read aloud, and the speech host's
+ * TLS connection is pre-warmed before the POST (below). Any failure —
+ * no key, no network, a non-200, a TLS error — falls back to the stock
+ * caption pacing. Never a substitute voice.
+ */
+
+#define FISH_TTS_URL "https://api.fish.audio/v1/tts"
+
+// The namespace and keys are config_store's, shared with main/.
+static bool fish_setting(const char *key, const char *fallback, char *out, size_t cap)
+{
+    nvs_handle_t h;
+    if (nvs_open("homehub", NVS_READONLY, &h) == ESP_OK) {
+        size_t len = cap;
+        esp_err_t err = nvs_get_str(h, key, out, &len);
+        nvs_close(h);
+        if (err == ESP_OK && out[0]) {
+            return true;
+        }
+    }
+    if (fallback && fallback[0]) {
+        strlcpy(out, fallback, cap);
+        return true;
+    }
+    out[0] = '\0';
+    return false;
+}
+
+// Drops Markdown's marks from a reply before it is spoken (upstream
+// PR #165's fix): **, __, *, `, heading #s, [text](url) links, > quotes
+// and _italics_ would otherwise be read aloud or mangled by the speech
+// engine. Deliberately simple, in the PR's spirit: emphasis markers and
+// heading/quote markers go, links keep their visible text, everything
+// else passes through, and a word-internal underscore (a name, a file)
+// survives. Plain text in, plain text out.
+static void strip_markdown(const char *in, char *out, size_t cap)
+{
+    size_t o = 0;
+    bool line_start = true;
+    for (size_t i = 0; in[i] && o + 1 < cap; i++) {
+        char c = in[i];
+        if (c == '\n') {
+            out[o++] = c;
+            line_start = true;
+            continue;
+        }
+        if (line_start && (c == '#' || c == '>')) {
+            continue;   // heading / blockquote marker (and any repeats)
+        }
+        if (c == '*' || c == '`') {
+            continue;
+        }
+        if (c == '_' && (i == 0 || in[i - 1] == ' ' || in[i - 1] == '\n'
+                         || !in[i + 1] || in[i + 1] == ' ' || in[i + 1] == '\n')) {
+            continue;   // an emphasis edge, not a word-internal underscore
+        }
+        if (c == '[') {
+            // [text](url): speak the text, skip the URL.
+            const char *close = strchr(in + i, ']');
+            if (close && close[1] == '(') {
+                const char *end = strchr(close + 2, ')');
+                if (end) {
+                    for (const char *p = in + i + 1; p < close && o + 1 < cap; p++) {
+                        out[o++] = *p;
+                    }
+                    i = (size_t)(end - in);
+                    line_start = false;
+                    continue;
+                }
+            }
+        }
+        out[o++] = c;
+        if (c != ' ' && c != '\t') line_start = false;
+    }
+    out[o] = '\0';
+    // Collapse the spaces a removed marker can leave doubled.
+    char *r = out, *w = out;
+    while (*r) {
+        if (*r == ' ' && w > out && w[-1] == ' ') {
+            r++;
+            continue;
+        }
+        *w++ = *r++;
+    }
+    *w = '\0';
+}
+
+/* TLS pre-warm (jjenglert's lessons-learned, Apache-2.0, author-measured
+ * on his Waveshare board: first audio 3.4-4 s cold → 1.3-1.7 s warm —
+ * his numbers, to be re-measured on this hardware). esp_http_client has
+ * no connection pool to reuse, so before the POST this pays the speech
+ * host's TLS handshake once, early: a HEAD whose answer is ignored. The
+ * POST still handshakes on its own connection, but right behind the
+ * warm-up the server's session resumption makes it the cheap kind.
+ * Throttled to one warm-up per host per TTS_WARM_WINDOW, and a failed
+ * warm-up costs nothing — the POST's own result decides the fallback. */
+#define TTS_WARM_WINDOW_US (150LL * 1000000LL)
+static char s_warm_url[192];
+static int64_t s_warm_until_us;
+
+static void tts_prewarm(const char *url)
+{
+    int64_t now = esp_timer_get_time();
+    if (strcmp(s_warm_url, url) == 0 && now < s_warm_until_us) {
+        return;   // this host is already warm
+    }
+    strlcpy(s_warm_url, url, sizeof(s_warm_url));
+    s_warm_until_us = now + TTS_WARM_WINDOW_US;
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .method = HTTP_METHOD_HEAD,
+        .timeout_ms = 8000,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
+    esp_http_client_handle_t warm = esp_http_client_init(&cfg);
+    if (!warm) return;
+    if (esp_http_client_open(warm, 0) == ESP_OK) {
+        esp_http_client_fetch_headers(warm);
+    }
+    esp_http_client_cleanup(warm);
+}
+
+// The speech adapter: streams one message's MP3 into tts_data(), on this task, as it
+// arrives; sets s_turn.mp3_ended at the end. True when any audio arrived.
+// The fetch is blocking, so decode() can't drain while it runs: HAL-style
+// replies are a sentence or two (a few seconds of MP3, far under MP3_BUF),
+// and if a reply ever fills the buffer the speech is cut there rather
+// than dropped mid-stream by tts_data().
+static bool muse_tts_fetch(const char *text)
+{
+    char key[161], voice[65], model[24], relay[192];
+    if (!fish_setting("fish_key", CONFIG_MUSE_TTS_FISH_API_KEY, key, sizeof(key))) {
+        return false;
+    }
+    fish_setting("fish_voice", CONFIG_MUSE_TTS_FISH_REFERENCE_ID, voice, sizeof(voice));
+    fish_setting("fish_model", CONFIG_MUSE_TTS_FISH_MODEL, model, sizeof(model));
+    // A stored speech URL switches this fetch to the relay (see the
+    // adapter note above); none stored means direct Fish.
+    bool use_relay = fish_setting("fish_url", NULL, relay, sizeof(relay));
+    const char *url = use_relay ? relay : FISH_TTS_URL;
+
+    char plain[TEXT_MAX];
+    strip_markdown(text, plain, sizeof(plain));
+    if (!plain[0]) return false;
+
+    tts_prewarm(url);
+
+    cJSON *body = cJSON_CreateObject();
+    if (!body) return false;
+    if (use_relay) {
+        // OpenAI speech format (AIPI Step 4's fields): the relay maps
+        // voice/model to its own Fish call and returns the MP3.
+        cJSON_AddStringToObject(body, "input", plain);
+        cJSON_AddStringToObject(body, "model", model[0] ? model : "s2.1-pro-free");
+        if (voice[0]) cJSON_AddStringToObject(body, "voice", voice);
+        cJSON_AddStringToObject(body, "response_format", "mp3");
+    } else {
+        cJSON_AddStringToObject(body, "text", plain);
+        cJSON_AddStringToObject(body, "format", "mp3");
+        cJSON_AddStringToObject(body, "latency", "balanced");
+        if (voice[0]) cJSON_AddStringToObject(body, "reference_id", voice);
+    }
+    char *json = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+    if (!json) return false;
+
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .method = HTTP_METHOD_POST,
+        .timeout_ms = 20000,
+        .buffer_size = 4096,
+        .buffer_size_tx = 4096,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        cJSON_free(json);
+        return false;
+    }
+    char auth[176];
+    snprintf(auth, sizeof(auth), "Bearer %s", key);
+    esp_http_client_set_header(client, "Authorization", auth);
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    if (!use_relay) {
+        esp_http_client_set_header(client, "model", model[0] ? model : "s2.1-pro-free");
+    }
+
+    bool got = false;
+    esp_err_t err = esp_http_client_open(client, (int)strlen(json));
+    if (err == ESP_OK) {
+        esp_http_client_write(client, json, (int)strlen(json));
+        esp_http_client_fetch_headers(client);
+        if (esp_http_client_get_status_code(client) == 200) {
+            uint8_t *chunk = static_cast<uint8_t *>(heap_caps_malloc(4096, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+            if (chunk) {
+                int n;
+                while ((n = esp_http_client_read(client, (char *)chunk, 4096)) > 0) {
+                    tts_data(chunk, (size_t)n);
+                    got = true;
+                    if (s_turn.mp3_len >= MP3_BUF - 4096) {
+                        ESP_LOGW(TAG, "speech reply filled the MP3 buffer; cutting the speech there");
+                        break;
+                    }
+                }
+                heap_caps_free(chunk);
+            }
+        } else {
+            ESP_LOGW(TAG, "speech answered HTTP %d; captions only", esp_http_client_get_status_code(client));
+        }
+    } else {
+        ESP_LOGW(TAG, "speech open failed: %s; captions only", esp_err_to_name(err));
+    }
+    esp_http_client_cleanup(client);
+    cJSON_free(json);
+    memset(key, 0, sizeof(key));
+    if (got) {
+        s_turn.mp3_ended = true;   /* decode() drains the rest, then finishes */
+    }
+    return got;
+}
+
 static void start_tts(void)
 {
     if (s_turn.tts_msg >= 0) {
@@ -1518,21 +1763,32 @@ static void start_tts(void)
         if (m.tts != TTS_QUEUED) {
             continue;
         }
-        /*
-         * Replies are text, shown at reading pace: silence in place of speech
-         * paces the captions and ends the turn. To speak them instead, send
-         * the message's text (s_turn.texts + i * TEXT_MAX, if texts was
-         * allocated; up to TEXT_MAX - 1 bytes) to a TTS API of your choice and
-         * play the MP3 it returns. In place of the silence below: keep
-         * m.tts = TTS_ACTIVE and s_turn.tts_msg = i, set s_turn.silent = false,
-         * m.pcm_start = s_turn.pcm_out, m.pcm_frames = 0, s_turn.mp3_len = 0,
-         * s_turn.mp3_ended = false, s_turn.kbps = 0, s_turn.down_rate = 0 and
-         * mp3dec_init(&s_turn.dec). Then, on this task, pass the MP3 to
-         * tts_data() as it arrives (it buffers up to MP3_BUF and drops the
-         * rest, so hold off while it's full) and set s_turn.mp3_ended at the
-         * end. decode() plays it at the speaker's volume, captions following,
-         * and finishes the message once it's drained.
-         */
+        // Speech, when it can be had: the speaker is on, the texts buffer
+        // exists and Fish answers. Set up exactly as the hook this replaces
+        // prescribed, then fetch on this task.
+        if (!s_turn.text && s_turn.texts && muse_settings_speaker_on()) {
+            m.pcm_start = s_turn.pcm_out;
+            m.pcm_frames = 0;
+            m.tts = TTS_ACTIVE;
+            s_turn.tts_msg = i;
+            s_turn.silent = false;
+            s_turn.mp3_len = 0;
+            s_turn.mp3_ended = false;
+            s_turn.kbps = 0;
+            s_turn.down_rate = 0;
+            mp3dec_init(&s_turn.dec);
+            show_reply_start(m);
+            if (muse_tts_fetch(s_turn.texts + i * TEXT_MAX)) {
+                ESP_LOGI(TAG, "speaking message %s (Fish speech)", m.id);
+                return;
+            }
+            // No speech after all: fall through to the stock pacing with
+            // this message still the active one.
+            s_turn.mp3_len = 0;
+            s_turn.mp3_ended = false;
+        }
+        // Stock behaviour: the message shows at reading pace, silence in
+        // place of speech pacing the captions and ending the turn.
         m.pcm_start = s_turn.pcm_out;
         m.pcm_frames = (uint32_t)(m.len * MIC_RATE / TEXT_CHARS_PER_S);
         m.tts = TTS_ACTIVE;

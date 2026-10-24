@@ -43,6 +43,7 @@
 #include "lwip/ip4_addr.h"
 
 #include "identity.h"
+#include "avatar_set.h"
 #include "sdk_token_console.h"
 #include "config_store.h"
 #include "wifi_mgr.h"
@@ -1930,6 +1931,11 @@ static cJSON *on_ws_command(
 #if CONFIG_HOMEHUB_VOICE
     if (strcmp(command, "voice.configure") == 0) {
         return voice_configure_command(params);
+    }
+#endif
+#if CONFIG_MUSE_AVATAR_SET
+    if (strcmp(command, "avatar.set") == 0) {
+        return avatar_set_ws_command(params);
     }
 #endif
 #if CONFIG_HOMEHUB_SENSECAP_SENSORS
